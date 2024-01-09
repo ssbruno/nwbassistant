@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+    <head>
+		<title>Fraud Prevention CoE - Virtual Asssistant Portal</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+        <!-- Latest compiled and minified CSS -->
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+        <!-- jQuery library -->
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
+        <!-- Latest compiled JavaScript -->
+        <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+    </head>
+	<body>
+		<div class="container">
+			<h1>Fraud Prevention CoE - Virtual Asssistant Portal</h1>
+			<p id="status">Not Connected</p>
+			<div class="input-group">
+				<span class="input-group-addon"><i class="glyphicon glyphicon-user">&nbsp;Customer Name</i></span>
+				<input id="custname" type="text" class="form-control" name="custname" placeholder="Customer Name" value="Nick">
+			</div>
+			<div class="input-group">
+				<span class="input-group-addon"><i class="glyphicon glyphicon-lock">&nbsp;Account #</i></span>
+				<input id="acctno" type="text" class="form-control" name="acctno" placeholder="Account Number" value="****5678">
+			</div>
+
+
+			<input type="hidden" id="rid" value="r0" />
+			
+
+			<input type="hidden" id="convseq" value="1" />
+			<input type="hidden" id="trclass" value="warning" />
+
+			<div class="panel panel-primary">
+				<div class="panel-heading">Customer Conversation Panel:</div>
+				<div class="panel-body">
+					<table class="table" id="rsptbl">
+						<thead>
+							<tr>
+							  <th>Conversation Sequence #</th>
+							  <th>Customer's Speech Transcript (Deepgram)</th>
+							  <th>Response from OpenAI + Internal Schematic Engine</th>
+							  <th>Audio response of Virtual Assistant (EdenAI)</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr class="warning">
+								<td><span>0<span></td>
+								<td><p id='trans0'></p></td>
+								<td><p id='assist0'><p></td>
+								<td><audio id='audio0' controls><source id='source0' src='' type='audio/wav' /></audio></td>
+							  </tr>
+						</tbody>
+					</table>
+				</div>
+			  </div>
+
+			
+
+		</div>
+	</body>
+	<script>
+		//Speech to Text
+		var startOfConv = true;
+		listenToMicrophone();
+		function listenToMicrophone(){
+			//buildTableRow();
+			navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+				console.log({ stream })
+				if (!MediaRecorder.isTypeSupported('audio/webm'))
+					return alert('Browser not supported')
+				const mediaRecorder = new MediaRecorder(stream, {mimeType: 'audio/webm',});
+				const socket = new WebSocket('wss://api.deepgram.com/v1/listen', ['token','d82652c8d704767e8a4cddedfae4de8852298ad7',]);
+				
+				socket.onopen = () => {
+					document.querySelector('#status').textContent = 'Connected'
+					console.log({ event: 'onopen' })
+					mediaRecorder.addEventListener('dataavailable', async (event) => {
+						if (event.data.size > 0 && socket.readyState == 1) {
+							socket.send(event.data);
+						}
+					})
+					mediaRecorder.start(1000);
+				}
+	
+				socket.onmessage = (message) => {
+					console.log('Sending Message');
+					const received = JSON.parse(message.data);
+					const transcript = received.channel.alternatives[0].transcript;
+					if (transcript && received.is_final) {
+						console.log(transcript);
+						var id = Number(document.getElementById('convseq').value)-1
+						document.getElementById('trans'+id).innerText = transcript;
+						SendTranscript(transcript);
+						socket.close();
+						mediaRecorder.stop();
+					}
+				}
+	
+				socket.onclose = () => {
+					console.log({ event: 'onclose' })
+				}
+	
+				socket.onerror = (error) => {
+					console.log({ event: 'onerror', error })
+				}
+			})
+		}
+	
+		//API call to get Response
+		function SendTranscript(data) {
+			var xhttp = new XMLHttpRequest();
+			xhttp.onreadystatechange = function() {
+				if (this.readyState == 4 && this.status == 200) {
+					console.log(this.responseText); 
+					var response = JSON.parse(this.responseText);
+					var id = Number(document.getElementById('convseq').value)-1
+					document.getElementById('assist'+id).innerText = response.text;
+					//document.querySelector('#nwgassistant').textContent += response.text + ' ';
+					document.getElementById('rid').value = response.rid;
+					document.getElementById('custname').value = response.custname;
+					loadAudioContent(response.audio);
+					buildTableRow();					
+				}
+			};
+			data = data.replaceAll(' ', '-');
+			var custname = document.getElementById('custname').value;
+			var rid = document.getElementById('rid').value;
+			xhttp.open("GET", "http://127.0.0.1:8000/api/getresponse?transcript="+data+"&custname="+custname+"&rid="+rid, true);
+			xhttp.send();
+		}
+	
+		//Audio
+		function loadAudioContent(dataURI) {
+			let base64 = dataURI;
+			let raw = window.atob(base64);
+			let rawLength = raw.length;
+			let arr = new Uint8Array(new ArrayBuffer(rawLength));
+	
+			for (let i = 0; i < rawLength; i++) {
+				arr[i] = raw.charCodeAt(i);
+			}
+			let blob = new Blob([arr], {type: 'audio/wav'});
+			let blobUrl = URL.createObjectURL(blob);
+			//console.log('Got Audio Blob: '+blobUrl);
+			var id = Number(document.getElementById('convseq').value)-1;
+			document.getElementById("source"+id).setAttribute("src", blobUrl);
+			//console.log(document.getElementById("source"));
+			document.getElementById("audio"+id).load();
+		}
+
+		//Building Table
+		function buildTableRow(){
+			var idobj = document.getElementById('convseq');
+			var nextidval = idobj.value;
+
+			var clsobj = document.getElementById('trclass');
+			var nextclsval = clsobj.value;
+
+			var myHtmlContent = "<h3>hello</h3>"
+			
+			var tableRef = document.getElementById('rsptbl').getElementsByTagName('tbody')[0];
+			var newRow = tableRef.insertRow(tableRef.rows.length);
+			newRow.className = nextclsval;
+			//Seq Number Cell:
+			var cell1 = newRow.insertCell();
+			cell1.innerHTML = "<span>"+nextidval+"<span>";
+			
+			//Customer Transcript
+			var cell2 = newRow.insertCell();
+			cell2.innerHTML = "<p id='trans"+nextidval+"'><button type='button' class='btn btn-primary' onclick='script:listenToMicrophone();'>Listen</button><p>";
+
+			//Assistant Response
+			var cell3 = newRow.insertCell();
+			cell3.innerHTML = "<p id='assist"+nextidval+"'><p>";
+
+			//Audio Cell
+			var cell4 = newRow.insertCell();
+			cell4.innerHTML = "<audio id='audio"+nextidval+"' controls><source id='source"+nextidval+"' src='' type='audio/wav' /></audio>";
+
+			idobj.value = Number(nextidval)+1;
+			if(nextclsval == "warning")
+				clsobj.value = "success";
+			else
+				clsobj.value = "warning";
+		}
+	  </script>
+</html>
